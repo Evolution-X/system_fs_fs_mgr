@@ -610,7 +610,6 @@ TEST_F(LiblpTest, UpdateMetadataCleanFailure) {
     ASSERT_EQ(GetPartitionName(new_table->partitions[0]),
               GetPartitionName(imported->partitions[0]));
 
-
     // Flash again. After, the backup and primary copy should be coherent.
     // Note that the sync step should have used the primary to sync, not
     // the backup.
