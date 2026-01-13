@@ -58,7 +58,6 @@
 namespace android {
 namespace snapshot {
 
-using aidl::android::hardware::boot::MergeStatus;
 using android::base::unique_fd;
 using android::dm::DeviceMapper;
 using android::dm::DmDeviceState;
@@ -68,20 +67,16 @@ using android::dm::DmTargetSnapshot;
 using android::dm::DmTargetUser;
 using android::dm::kSectorSize;
 using android::dm::SnapshotStorageMode;
-using android::fiemap::FiemapStatus;
-using android::fiemap::IImageManager;
 using android::fs_mgr::CreateDmTable;
 using android::fs_mgr::CreateLogicalPartition;
 using android::fs_mgr::CreateLogicalPartitionParams;
 using android::fs_mgr::GetPartitionGroupName;
 using android::fs_mgr::GetPartitionName;
-using android::fs_mgr::IPropertyFetcher;
 using android::fs_mgr::LpMetadata;
 using android::fs_mgr::MetadataBuilder;
 using android::fs_mgr::SlotNumberForSlotSuffix;
 using chromeos_update_engine::DeltaArchiveManifest;
 using chromeos_update_engine::Extent;
-using chromeos_update_engine::FileDescriptor;
 using chromeos_update_engine::PartitionUpdate;
 template <typename T>
 using RepeatedPtrField = google::protobuf::RepeatedPtrField<T>;
@@ -89,7 +84,6 @@ using std::chrono::duration_cast;
 using namespace std::chrono_literals;
 using namespace std::string_literals;
 using android::base::Realpath;
-using android::base::StringPrintf;
 
 static constexpr char kBootSnapshotsWithoutSlotSwitch[] =
         "/metadata/ota/snapshot-boot-without-slot-switch";
