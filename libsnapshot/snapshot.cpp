@@ -153,9 +153,10 @@ SnapshotManager::SnapshotDriver SnapshotManager::GetSnapshotDriver(LockedFile* l
         } else {
             return SnapshotManager::SnapshotDriver::DM_USER;
         }
-    } else {
-        return SnapshotManager::SnapshotDriver::DM_SNAPSHOT;
     }
+    LOG(FATAL) << "dm-snapshot is deprecated since it was introduced in android S";
+    // This is unreachable, but needed for compilation.
+    return SnapshotManager::SnapshotDriver::DM_SNAPSHOT;
 }
 
 static std::string GetSnapshotCowName(const std::string& snapshot_name,
@@ -982,101 +983,6 @@ bool SnapshotManager::MapUserspaceCow(LockedFile* lock, const std::string& name,
     }
 }
 
-bool SnapshotManager::MapSnapshot(LockedFile* lock, const std::string& name,
-                                  const std::string& base_device, const std::string& cow_device,
-                                  const std::chrono::milliseconds& timeout_ms,
-                                  std::string* dev_path) {
-    CHECK(lock);
-
-    SnapshotStatus status;
-    if (!ReadSnapshotStatus(lock, name, &status)) {
-        return false;
-    }
-    if (status.state() == SnapshotState::NONE || status.state() == SnapshotState::MERGE_COMPLETED) {
-        LOG(ERROR) << "Should not create a snapshot device for " << name
-                   << " after merging has completed.";
-        return false;
-    }
-
-    // Validate the block device size, as well as the requested snapshot size.
-    // Note that during first-stage init, we don't have the device paths.
-    if (android::base::StartsWith(base_device, "/")) {
-        unique_fd fd(open(base_device.c_str(), O_RDONLY | O_CLOEXEC));
-        if (fd < 0) {
-            PLOG(ERROR) << "open failed: " << base_device;
-            return false;
-        }
-        auto dev_size = get_block_device_size(fd);
-        if (!dev_size) {
-            PLOG(ERROR) << "Could not determine block device size: " << base_device;
-            return false;
-        }
-        if (status.device_size() != dev_size) {
-            LOG(ERROR) << "Block device size for " << base_device << " does not match"
-                       << "(expected " << status.device_size() << ", got " << dev_size << ")";
-            return false;
-        }
-    }
-    if (status.device_size() % kSectorSize != 0) {
-        LOG(ERROR) << "invalid blockdev size for " << base_device << ": " << status.device_size();
-        return false;
-    }
-    if (status.snapshot_size() % kSectorSize != 0 ||
-        status.snapshot_size() > status.device_size()) {
-        LOG(ERROR) << "Invalid snapshot size for " << base_device << ": " << status.snapshot_size();
-        return false;
-    }
-    if (status.device_size() != status.snapshot_size()) {
-        LOG(ERROR) << "Device size and snapshot size must be the same (device size = "
-                   << status.device_size() << ", snapshot size = " << status.snapshot_size();
-        return false;
-    }
-
-    uint64_t snapshot_sectors = status.snapshot_size() / kSectorSize;
-
-    // Note that merging is a global state. We do track whether individual devices
-    // have completed merging, but the start of the merge process is considered
-    // atomic.
-    SnapshotStorageMode mode;
-    SnapshotUpdateStatus update_status = ReadSnapshotUpdateStatus(lock);
-    switch (update_status.state()) {
-        case UpdateState::MergeCompleted:
-        case UpdateState::MergeNeedsReboot:
-            LOG(ERROR) << "Should not create a snapshot device for " << name
-                       << " after global merging has completed.";
-            return false;
-        case UpdateState::Merging:
-        case UpdateState::MergeFailed:
-            // Note: MergeFailed indicates that a merge is in progress, but
-            // is possibly stalled. We still have to honor the merge.
-            if (DecideMergePhase(status) == update_status.merge_phase()) {
-                mode = SnapshotStorageMode::Merge;
-            } else {
-                mode = SnapshotStorageMode::Persistent;
-            }
-            break;
-        default:
-            mode = SnapshotStorageMode::Persistent;
-            break;
-    }
-
-    if (mode == SnapshotStorageMode::Persistent && status.state() == SnapshotState::MERGING) {
-        LOG(ERROR) << "Snapshot: " << name
-                   << " has snapshot status Merging but mode set to Persistent."
-                   << " Changing mode to Snapshot-Merge.";
-        mode = SnapshotStorageMode::Merge;
-    }
-
-    DmTable table;
-    table.Emplace<DmTargetSnapshot>(0, snapshot_sectors, base_device, cow_device, mode,
-                                    kSnapshotChunkSize);
-    if (!dm_.CreateDevice(name, table, dev_path, timeout_ms)) {
-        LOG(ERROR) << "Could not create snapshot device: " << name;
-        return false;
-    }
-    return true;
-}
-
 std::optional<std::string> SnapshotManager::MapCowImage(
         const std::string& name, const std::chrono::milliseconds& timeout_ms) {
     if (!EnsureImageManager()) return std::nullopt;
@@ -1129,7 +1035,6 @@ bool SnapshotManager::MapSourceDevice(LockedFile* lock, const std::string& name,
 
 bool SnapshotManager::UnmapSnapshot(LockedFile* lock, const std::string& name) {
     CHECK(lock);
-
     if (UpdateUsesUserSnapshots(lock)) {
         if (!UnmapUserspaceSnapshotDevice(lock, name)) {
             return false;
@@ -3167,38 +3072,6 @@ bool SnapshotManager::MapPartitionWithSnapshot(LockedFile* lock,
         created_devices.EmplaceBack<AutoUnmapDevice>(&dm_, name);
 
         cow_device = new_cow_device;
-    }
-
-    // For userspace snapshots, dm-user block device itself will act as a
-    // snapshot device. There is one subtle difference - MapSnapshot will create
-    // either snapshot target or snapshot-merge target based on the underlying
-    // state of the snapshot device. If snapshot-merge target is created, merge
-    // will immediately start in the kernel.
-    //
-    // This is no longer true with respect to userspace snapshots. When dm-user
-    // block device is created, we just have the snapshots ready but daemon in
-    // the user-space will not start the merge. We have to explicitly inform the
-    // daemon to resume the merge. Check ProcessUpdateState() call stack.
-    if (!UpdateUsesUserSnapshots(lock)) {
-        remaining_time = GetRemainingTime(params.timeout_ms, begin);
-        if (remaining_time.count() < 0) return false;
-
-        std::string path;
-        if (!MapSnapshot(lock, params.GetPartitionName(), base_device, cow_device, remaining_time,
-                         &path)) {
-            LOG(ERROR) << "Could not map snapshot for partition: " << params.GetPartitionName();
-            return false;
-        }
-        // No need to add params.GetPartitionName() to created_devices since it is immediately
-        // released.
-
-        if (paths) {
-            paths->snapshot_device = path;
-        }
-        LOG(INFO) << "Mapped " << params.GetPartitionName() << " as snapshot device at " << path;
-    } else {
-        LOG(INFO) << "Mapped " << params.GetPartitionName() << " as snapshot device at "
-                  << cow_device;
     }
 
     created_devices.Release();

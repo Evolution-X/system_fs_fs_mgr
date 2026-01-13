@@ -604,32 +604,7 @@ TEST_F(SnapshotTest, CreateSnapshot) {
     ASSERT_TRUE(sm->DeleteSnapshot(lock_.get(), "test-snapshot"));
 }
 
-TEST_F(SnapshotTest, MapSnapshot) {
-    ASSERT_TRUE(AcquireLock());
 
-    PartitionCowCreator cow_creator;
-    cow_creator.using_snapuserd = snapuserd_required_;
-
-    static const uint64_t kDeviceSize = 1024 * 1024;
-    SnapshotStatus status;
-    status.set_name("test-snapshot");
-    status.set_device_size(kDeviceSize);
-    status.set_snapshot_size(kDeviceSize);
-    status.set_cow_file_size(kDeviceSize);
-    ASSERT_TRUE(sm->CreateSnapshot(lock_.get(), &cow_creator, &status));
-    ASSERT_TRUE(CreateCowImage("test-snapshot"));
-
-    std::string base_device;
-    ASSERT_TRUE(CreatePartition("base-device", kDeviceSize, &base_device));
-
-    std::string cow_device;
-    ASSERT_TRUE(MapCowImage("test-snapshot", 10s, &cow_device));
-
-    std::string snap_device;
-    ASSERT_TRUE(sm->MapSnapshot(lock_.get(), "test-snapshot", base_device, cow_device, 10s,
-                                &snap_device));
-    ASSERT_TRUE(android::base::StartsWith(snap_device, "/dev/block/dm-"));
-}
 
 TEST_F(SnapshotTest, NoMergeBeforeReboot) {
     ASSERT_TRUE(sm->FinishedSnapshotWrites(false));
