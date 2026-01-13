@@ -2775,74 +2775,6 @@ bool SnapshotManager::MarkSnapuserdFromSystem() {
     return true;
 }
 
-/*
- * Please see b/304829384 for more details.
- *
- * In Android S, we use dm-snapshot for mounting snapshots and snapshot-merge
- * process. If the vendor partition continues to be on Android S, then
- * "snapuserd" binary in first stage ramdisk will be from vendor partition.
- * Thus, we need to maintain backward compatibility.
- *
- * Now, We take a two step approach to maintain the backward compatibility:
- *
- * 1: During OTA installation, we will continue to use "user-space" snapshots
- * for OTA installation as both update-engine and snapuserd binary will be from system partition.
- * However, during installation, we mark "legacy_snapuserd" in
- * SnapshotUpdateStatus file to mark that this is a path to support backward compatibility.
- * Thus, this function will return "false" during OTA installation.
- *
- * 2: Post OTA reboot, there are two key steps:
- *    a: During first stage init, "init" and "snapuserd" could be from vendor
- *    partition. This could be from Android S. Thus, the snapshot mount path
- *    will be based off dm-snapshot.
- *
- *    b: Post selinux transition, "init" and "update-engine" will be "system"
- *    partition. Now, since the snapshots are mounted off dm-snapshot,
- *    update-engine interaction with "snapuserd" should work based off
- *    dm-snapshots.
- *
- *    TL;DR: update-engine will use the "system" snapuserd for installing new
- *    updates (this is safe as there is no "vendor" snapuserd running during
- *    installation). Post reboot, update-engine will use the legacy path when
- *    communicating with "vendor" snapuserd that was started in first-stage
- *    init. Hence, this function checks:
- *         i: Are we in post OTA reboot
- *         ii: Is the Vendor from Android 12
- *         iii: If both (i) and (ii) are true, then use the dm-snapshot based
- *         approach.
- *
- * 3: Post OTA reboot, if the vendor partition was updated from Android 12 to
- * any other release post Android 12, then snapuserd binary will be "system"
- * partition as post Android 12, init_boot will contain a copy of snapuserd
- * binary. Thus, during first stage init, if init is able to communicate to
- * daemon, that gives us a signal that the binary is from "system" copy. Hence,
- * there is no need to fallback to legacy dm-snapshot. Thus, init will use a
- * marker in /metadata to signal that the snapuserd binary from first stage init
- * can handle userspace snapshots.
- *
- */
-bool SnapshotManager::IsLegacySnapuserdPostReboot() {
-    auto slot = GetCurrentSlot();
-    if (slot == Slot::Target) {
-        /*
-            If this marker is present, the daemon can handle userspace snapshots.
-            During post-OTA reboot, this implies that the vendor partition is
-            Android 13 or higher. If the snapshots were created on an
-            Android 12 vendor, this means the vendor partition has been updated.
-        */
-        if (access(GetSnapuserdFromSystemPath().c_str(), F_OK) == 0) {
-            is_snapshot_userspace_ = true;
-            return false;
-        }
-        // If the marker isn't present and if the vendor is still in Android 12
-        if (is_legacy_snapuserd_.has_value() && is_legacy_snapuserd_.value() == true) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 bool SnapshotManager::UpdateUsesUserSnapshots() {
     // This and the following function is constantly
     // invoked during snapshot merge. We want to avoid
@@ -2856,10 +2788,6 @@ bool SnapshotManager::UpdateUsesUserSnapshots() {
     // it is safe to read successive checks from memory.
 
     if (is_snapshot_userspace_.has_value()) {
-        // Check if legacy snapuserd is running post OTA reboot
-        if (IsLegacySnapuserdPostReboot()) {
-            return false;
-        }
         return is_snapshot_userspace_.value();
     }
 
@@ -2873,11 +2801,6 @@ bool SnapshotManager::UpdateUsesUserSnapshots(LockedFile* lock) {
     if (!is_snapshot_userspace_.has_value()) {
         SnapshotUpdateStatus update_status = ReadSnapshotUpdateStatus(lock);
         is_snapshot_userspace_ = update_status.userspace_snapshots();
-        is_legacy_snapuserd_ = update_status.legacy_snapuserd();
-    }
-
-    if (IsLegacySnapuserdPostReboot()) {
-        return false;
     }
 
     return is_snapshot_userspace_.value();
@@ -3746,7 +3669,6 @@ bool SnapshotManager::WriteUpdateState(LockedFile* lock, UpdateState state,
         status.set_merge_phase(old_status.merge_phase());
         status.set_userspace_snapshots(old_status.userspace_snapshots());
         status.set_io_uring_enabled(old_status.io_uring_enabled());
-        status.set_legacy_snapuserd(old_status.legacy_snapuserd());
         status.set_o_direct(old_status.o_direct());
         status.set_skip_verification(old_status.skip_verification());
         status.set_cow_op_merge_size(old_status.cow_op_merge_size());
@@ -3984,7 +3906,6 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
     // Deduce supported features.
     bool userspace_snapshots = true;
     bool legacy_compression = GetLegacyCompressionEnabledProperty();
-    bool is_legacy_snapuserd = false;
 
     if (!vabc_disable_reason.empty()) {
         if (userspace_snapshots) {
@@ -3995,7 +3916,6 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
         }
         userspace_snapshots = false;
         legacy_compression = false;
-        is_legacy_snapuserd = false;
     }
 
     if (legacy_compression || userspace_snapshots) {
@@ -4123,10 +4043,6 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
             status.set_skip_verification(true);
             LOG(INFO) << "skipping verification of images";
         }
-        if (is_legacy_snapuserd) {
-            status.set_legacy_snapuserd(true);
-            LOG(INFO) << "Setting legacy_snapuserd to true";
-        }
 
         status.set_cow_op_merge_size(
                 android::base::GetUintProperty<uint32_t>("ro.virtual_ab.cow_op_merge_size", 0));
@@ -4151,7 +4067,6 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
     }
 
     is_snapshot_userspace_.emplace(userspace_snapshots);
-    is_legacy_snapuserd_.emplace(is_legacy_snapuserd);
 
     if (!device()->IsTestDevice() && using_snapuserd) {
         // Terminate stale daemon if any
