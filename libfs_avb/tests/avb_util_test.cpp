@@ -28,7 +28,7 @@
 #include "fs_avb_test_util.h"
 
 // Target classes or functions to test:
-using android::fs_mgr::AvbPartitionToDevicePatition;
+using android::fs_mgr::AvbPartitionToDevicePartition;
 using android::fs_mgr::DeriveAvbPartitionName;
 using android::fs_mgr::FstabEntry;
 using android::fs_mgr::GetAvbFooter;
@@ -89,15 +89,15 @@ void AvbUtilTest::SetVBMetaFlags(const base::FilePath& image_path, uint32_t flag
     EXPECT_EQ(sizeof flags_data, write(fd, &flags_data, sizeof flags_data));
 }
 
-TEST_F(AvbUtilTest, AvbPartitionToDevicePatition) {
-    EXPECT_EQ("system", AvbPartitionToDevicePatition("system", "", ""));
-    EXPECT_EQ("system", AvbPartitionToDevicePatition("system", "", "_b"));
+TEST_F(AvbUtilTest, AvbPartitionToDevicePartition) {
+    EXPECT_EQ("system", AvbPartitionToDevicePartition("system", "", ""));
+    EXPECT_EQ("system", AvbPartitionToDevicePartition("system", "", "_b"));
 
-    EXPECT_EQ("system_a", AvbPartitionToDevicePatition("system", "_a", ""));
-    EXPECT_EQ("system_a", AvbPartitionToDevicePatition("system", "_a", "_b"));
+    EXPECT_EQ("system_a", AvbPartitionToDevicePartition("system", "_a", ""));
+    EXPECT_EQ("system_a", AvbPartitionToDevicePartition("system", "_a", "_b"));
 
-    EXPECT_EQ("system_b", AvbPartitionToDevicePatition("system_other", "", "_b"));
-    EXPECT_EQ("system_b", AvbPartitionToDevicePatition("system_other", "_a", "_b"));
+    EXPECT_EQ("system_b", AvbPartitionToDevicePartition("system_other", "", "_b"));
+    EXPECT_EQ("system_b", AvbPartitionToDevicePartition("system_other", "_a", "_b"));
 }
 
 TEST_F(AvbUtilTest, DeriveAvbPartitionName) {
