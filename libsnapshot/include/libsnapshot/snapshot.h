@@ -919,9 +919,6 @@ class SnapshotManager final : public ISnapshotManager {
     // Set read-ahead size during OTA
     void SetReadAheadSize(const std::string& entry_block_device, off64_t size_kb);
 
-    // Returns true post OTA reboot if legacy snapuserd is required
-    bool IsLegacySnapuserdPostReboot();
-
     // Returns true if dm_name device has ublk device as parent
     bool IsParentUblkDevice(const std::string& dm_name);
 
@@ -935,7 +932,6 @@ class SnapshotManager final : public ISnapshotManager {
     std::unique_ptr<LpMetadata> old_partition_metadata_;
     std::optional<bool> is_snapshot_userspace_;
     std::optional<bool> is_snapshot_ublk_;
-    std::optional<bool> is_legacy_snapuserd_;
 };
 
 }  // namespace snapshot
