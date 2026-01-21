@@ -1013,8 +1013,46 @@ bool SnapshotManager::MapSourceDevice(LockedFile* lock, const std::string& name,
 
 bool SnapshotManager::UnmapSnapshot(LockedFile* lock, const std::string& name) {
     CHECK(lock);
-    if (!UnmapUserspaceSnapshotDevice(lock, name)) {
+    auto snapshot_driver = GetSnapshotDriver(lock);
+    auto dm_user_name = GetSnapshotCowName(name, snapshot_driver);
+    if (dm_.GetState(dm_user_name) == DmDeviceState::INVALID) {
+        return true;
+    }
+    DeviceMapper::TargetInfo target;
+    auto is_mapped = IsSnapshotDevice(name, &target);
+
+    SnapshotStatus snapshot_status;
+
+    if (!ReadSnapshotStatus(lock, name, &snapshot_status)) {
         return false;
+    }
+    // If the merge is complete, then we switch dm tables which is equivalent
+    // to unmap; hence, we can't be deleting the device
+    // as the table would be mounted off partitions and will fail.
+    if (snapshot_status.state() != SnapshotState::MERGE_COMPLETED) {
+        if (!DeleteDeviceIfExists(dm_user_name, 4000ms)) {
+            LOG(ERROR) << "Cannot unmap " << dm_user_name;
+            return false;
+        }
+    }
+
+    // Only tell snapuserd if the device is actually mapped
+    if (is_mapped && EnsureSnapuserdConnected()) {
+        LOG(DEBUG) << "UnmapSnapshot: " << dm_user_name;
+        if (!snapuserd_client_->WaitForDeviceDelete(dm_user_name)) {
+            LOG(ERROR) << "Failed to wait for " << dm_user_name << " control device to delete";
+            return false;
+        }
+    }
+
+    // Ensure the control device is gone so we don't run into ABA problems.
+    // This is only needed for DM_USER
+    if (snapshot_driver == SnapshotManager::SnapshotDriver::DM_USER) {
+        auto control_device = "/dev/dm-user/" + dm_user_name;
+        if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
+            LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
+            return false;
+        }
     }
     return true;
 }
@@ -2893,54 +2931,6 @@ bool SnapshotManager::UnmapDmUserDevice(const std::string& dm_user_name) {
     if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
         LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
         return false;
-    }
-    return true;
-}
-
-bool SnapshotManager::UnmapUserspaceSnapshotDevice(LockedFile* lock,
-                                                   const std::string& snapshot_name) {
-    auto snapshot_driver = GetSnapshotDriver(lock);
-    auto dm_user_name = GetSnapshotCowName(snapshot_name, snapshot_driver);
-    if (dm_.GetState(dm_user_name) == DmDeviceState::INVALID) {
-        return true;
-    }
-    DeviceMapper::TargetInfo target;
-    auto is_mapped = IsSnapshotDevice(snapshot_name, &target);
-
-    CHECK(lock);
-
-    SnapshotStatus snapshot_status;
-
-    if (!ReadSnapshotStatus(lock, snapshot_name, &snapshot_status)) {
-        return false;
-    }
-    // If the merge is complete, then we switch dm tables which is equivalent
-    // to unmap; hence, we can't be deleting the device
-    // as the table would be mounted off partitions and will fail.
-    if (snapshot_status.state() != SnapshotState::MERGE_COMPLETED) {
-        if (!DeleteDeviceIfExists(dm_user_name, 4000ms)) {
-            LOG(ERROR) << "Cannot unmap " << dm_user_name;
-            return false;
-        }
-    }
-
-    // Only tell snapuserd if the device is actually mapped
-    if (is_mapped && EnsureSnapuserdConnected()) {
-        LOG(DEBUG) << "UnmapUserSpaceSnapshotDevice: " << dm_user_name;
-        if (!snapuserd_client_->WaitForDeviceDelete(dm_user_name)) {
-            LOG(ERROR) << "Failed to wait for " << dm_user_name << " control device to delete";
-            return false;
-        }
-    }
-
-    // Ensure the control device is gone so we don't run into ABA problems.
-    // This is only needed for DM_USER
-    if (snapshot_driver == SnapshotManager::SnapshotDriver::DM_USER) {
-        auto control_device = "/dev/dm-user/" + dm_user_name;
-        if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
-            LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
-            return false;
-        }
     }
     return true;
 }

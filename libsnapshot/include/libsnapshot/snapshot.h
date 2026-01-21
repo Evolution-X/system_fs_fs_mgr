@@ -778,9 +778,6 @@ class SnapshotManager final : public ISnapshotManager {
     // Unmap a dm-user device through snapuserd.
     bool UnmapDmUserDevice(const std::string& dm_user_name);
 
-    // Unmap a dm-user device for user space snapshots
-    bool UnmapUserspaceSnapshotDevice(LockedFile* lock, const std::string& snapshot_name);
-
     CancelResult TryCancelUpdate();
     CancelResult IsCancelUpdateSafe(UpdateState state);
 
