@@ -65,6 +65,7 @@ using android::dm::DmTable;
 using android::dm::DmTargetLinear;
 using android::dm::DmTargetUser;
 using android::dm::kSectorSize;
+using android::dm::SnapshotStorageMode;
 using android::fs_mgr::CreateDmTable;
 using android::fs_mgr::CreateLogicalPartition;
 using android::fs_mgr::CreateLogicalPartitionParams;

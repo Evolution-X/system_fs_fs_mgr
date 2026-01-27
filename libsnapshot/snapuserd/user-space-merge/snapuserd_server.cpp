@@ -16,6 +16,7 @@
 
 #include <arpa/inet.h>
 #include <cutils/sockets.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
