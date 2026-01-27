@@ -2178,7 +2178,8 @@ TEST_F(SnapshotUpdateTest, MergeInFastboot) {
     ASSERT_EQ(new_sm->ProcessUpdateState(), UpdateState::None);
 }
 
-// Test that after an OTA, before a merge, we can wipe data in recovery.
+// Test that if we reboot into recovery and a data wipe is pending, we can
+// catch it and force a rollback.
 TEST_F(SnapshotUpdateTest, DataWipeRollbackInRecovery) {
     // Execute the first update.
     ASSERT_TRUE(sm->BeginUpdate());
@@ -2200,6 +2201,31 @@ TEST_F(SnapshotUpdateTest, DataWipeRollbackInRecovery) {
     MountMetadata();
     EXPECT_TRUE(test_device->IsSlotUnbootable(1));
     EXPECT_FALSE(test_device->IsSlotUnbootable(0));
+}
+
+// Test that if we reboot into recovery and a data wipe is pending, but the
+// slot is marked successful, we merge the update instead of rolling back.
+TEST_F(SnapshotUpdateTest, DataWipeMergeInRecovery) {
+    // Execute the first update.
+    ASSERT_TRUE(sm->BeginUpdate());
+    ASSERT_TRUE(sm->CreateUpdateSnapshots(manifest_));
+    ASSERT_TRUE(MapUpdateSnapshots());
+    ASSERT_TRUE(sm->FinishedSnapshotWrites(false));
+
+    // Simulate shutting down the device.
+    ASSERT_TRUE(UnmapAll());
+
+    // Simulate a reboot into recovery.
+    auto test_device = new TestDeviceInfo(fake_super, "_b");
+    test_device->set_recovery(true);
+    test_device->set_slot_marked_successful(true);
+    auto new_sm = NewManagerForFirstStageMount(test_device);
+
+    EXPECT_EQ(new_sm->GetUpdateState(), UpdateState::Unverified);
+    ASSERT_TRUE(new_sm->HandleImminentDataWipe());
+    // Manually mount metadata so that we can call GetUpdateState() below.
+    MountMetadata();
+    EXPECT_FALSE(test_device->IsSlotUnbootable(1));
 }
 
 // Test that after an OTA and a bootloader rollback with no merge, we can wipe
