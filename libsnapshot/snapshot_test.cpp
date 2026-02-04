@@ -424,8 +424,9 @@ class SnapshotTest : public ::testing::Test {
 
         auto dynamic_partition_metadata = manifest.mutable_dynamic_partition_metadata();
         dynamic_partition_metadata->set_vabc_enabled(true);
-        dynamic_partition_metadata->set_cow_version(android::snapshot::kCowVersionMajor);
+        dynamic_partition_metadata->set_cow_version(android::snapshot::kMaxCowVersion);
         dynamic_partition_metadata->set_vabc_compression_param(FLAGS_compression_method);
+        dynamic_partition_metadata->set_compression_factor(4096);
 
         auto group = dynamic_partition_metadata->add_groups();
         group->set_name("group");
@@ -975,8 +976,9 @@ class SnapshotUpdateTest : public SnapshotTest {
 
         auto dynamic_partition_metadata = manifest_.mutable_dynamic_partition_metadata();
         dynamic_partition_metadata->set_vabc_enabled(true);
-        dynamic_partition_metadata->set_cow_version(android::snapshot::kCowVersionMajor);
+        dynamic_partition_metadata->set_cow_version(android::snapshot::kMaxCowVersion);
         dynamic_partition_metadata->set_vabc_compression_param(FLAGS_compression_method);
+        dynamic_partition_metadata->set_compression_factor(4096);
 
         // Create a fake update package metadata.
         // Not using full name "system", "vendor", "product" because these names collide with the
