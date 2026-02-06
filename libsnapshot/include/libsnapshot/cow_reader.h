@@ -169,8 +169,11 @@ class CowReader final : public ICowReader {
     void UpdateMergeOpsCompleted(int num_merge_ops) { header_.num_merge_ops += num_merge_ops; }
 
   private:
+    std::unique_ptr<ICowOpIter> GetRevOpIter(bool merge_progress = false);
     bool ParseV2(android::base::borrowed_fd fd, std::optional<uint64_t> label);
     bool PrepMergeOps();
+    bool GetMergeOrder(std::vector<uint32_t>* merge_op_blocks);
+    bool VerifyMergeSequence(const std::vector<uint32_t>& vec) const;
     // sequence data is stored as an operation with actual data residing in the data offset.
     bool GetSequenceDataV2(std::vector<uint32_t>* sequence_data);
     // v3 of the cow writes sequence data within its own separate sequence buffer.
@@ -186,10 +189,8 @@ class CowReader final : public ICowReader {
     std::optional<uint64_t> last_label_;
     std::shared_ptr<std::vector<CowOperation>> ops_;
     uint64_t merge_op_start_{};
-    std::shared_ptr<std::vector<int>> block_pos_index_;
     uint64_t num_total_data_ops_{};
     uint64_t num_ordered_ops_to_merge_{};
-    bool has_seq_ops_{};
     std::shared_ptr<std::unordered_map<uint64_t, uint64_t>> xor_data_loc_;
     ReaderFlags reader_flag_;
     bool is_merge_{};
