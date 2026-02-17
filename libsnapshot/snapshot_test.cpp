@@ -234,7 +234,7 @@ class SnapshotTest : public ::testing::Test {
             ASSERT_TRUE(AcquireLock());
 
             auto local_lock = std::move(lock_);
-            ASSERT_TRUE(sm->UnmapUserspaceSnapshotDevice(local_lock.get(), snapshot));
+            ASSERT_TRUE(sm->UnmapSnapshot(local_lock.get(), snapshot));
         }
     }
 

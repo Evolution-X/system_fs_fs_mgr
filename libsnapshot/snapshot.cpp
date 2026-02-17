@@ -1013,8 +1013,57 @@ bool SnapshotManager::MapSourceDevice(LockedFile* lock, const std::string& name,
 
 bool SnapshotManager::UnmapSnapshot(LockedFile* lock, const std::string& name) {
     CHECK(lock);
-    if (!UnmapUserspaceSnapshotDevice(lock, name)) {
+    auto snapshot_driver = GetSnapshotDriver(lock);
+    auto dm_user_name = GetSnapshotCowName(name, snapshot_driver);
+    auto state = dm_.GetState(dm_user_name);
+    if (state == DmDeviceState::INVALID) {
+        return true;
+    }
+    DeviceMapper::TargetInfo target;
+    auto is_mapped = IsSnapshotDevice(name, &target);
+
+    SnapshotStatus snapshot_status;
+
+    if (!ReadSnapshotStatus(lock, name, &snapshot_status)) {
+        // this check is just for CF to pass update_engine_integration tests. On
+        // startup, CF has a system_b partition for storing system_other. This is an active DM
+        // device that is not mapped. For regular OTA, we write snapshot status to mark system_b as
+        // inactive, but in testing we don't write this status and fail when we attempt to read the
+        // status.
+        if (DeleteDeviceIfExists(name)) {
+            LOG(INFO) << "deleted active device that is not a snapshot " << name;
+            return true;
+        }
+        LOG(ERROR) << "Could not delete device: " << name;
         return false;
+    }
+    // If the merge is complete, then we switch dm tables which is equivalent
+    // to unmap; hence, we can't be deleting the device
+    // as the table would be mounted off partitions and will fail.
+    if (snapshot_status.state() != SnapshotState::MERGE_COMPLETED) {
+        if (!DeleteDeviceIfExists(dm_user_name, 4000ms)) {
+            LOG(ERROR) << "Cannot unmap " << dm_user_name;
+            return false;
+        }
+    }
+
+    // Only tell snapuserd if the device is actually mapped
+    if (is_mapped && EnsureSnapuserdConnected()) {
+        LOG(DEBUG) << "UnmapSnapshot: " << dm_user_name;
+        if (!snapuserd_client_->WaitForDeviceDelete(dm_user_name)) {
+            LOG(ERROR) << "Failed to wait for " << dm_user_name << " control device to delete";
+            return false;
+        }
+    }
+
+    // Ensure the control device is gone so we don't run into ABA problems.
+    // This is only needed for DM_USER
+    if (snapshot_driver == SnapshotManager::SnapshotDriver::DM_USER) {
+        auto control_device = "/dev/dm-user/" + dm_user_name;
+        if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
+            LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
+            return false;
+        }
     }
     return true;
 }
@@ -2624,12 +2673,11 @@ bool SnapshotManager::MapPartitionWithSnapshot(LockedFile* lock,
         if (live_snapshot_status->state() == SnapshotState::NONE ||
             live_snapshot_status->cow_partition_size() + live_snapshot_status->cow_file_size() ==
                     0) {
-
             LOG(ERROR) << "Snapshot status for " << params.GetPartitionName()
-                         << " is invalid, ignoring: state = "
-                         << SnapshotState_Name(live_snapshot_status->state())
-                         << ", cow_partition_size = " << live_snapshot_status->cow_partition_size()
-                         << ", cow_file_size = " << live_snapshot_status->cow_file_size();
+                       << " is invalid, ignoring: state = "
+                       << SnapshotState_Name(live_snapshot_status->state())
+                       << ", cow_partition_size = " << live_snapshot_status->cow_partition_size()
+                       << ", cow_file_size = " << live_snapshot_status->cow_file_size();
             if (ReadUpdateState(lock) == UpdateState::Initiated) {
                 // If we lost snapshot status while applying an OTA, we must not proceed.
                 LOG(ERROR) << "Snapshot status is corrupt, OTA must be discarded.";
@@ -2900,65 +2948,6 @@ bool SnapshotManager::UnmapDmUserDevice(const std::string& dm_user_name) {
     if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
         LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
         return false;
-    }
-    return true;
-}
-
-bool SnapshotManager::UnmapUserspaceSnapshotDevice(LockedFile* lock,
-                                                   const std::string& snapshot_name) {
-    auto snapshot_driver = GetSnapshotDriver(lock);
-    auto dm_user_name = GetSnapshotCowName(snapshot_name, snapshot_driver);
-    auto state = dm_.GetState(dm_user_name);
-    if (state == DmDeviceState::INVALID) {
-        return true;
-    }
-    DeviceMapper::TargetInfo target;
-    auto is_mapped = IsSnapshotDevice(snapshot_name, &target);
-
-    CHECK(lock);
-
-    SnapshotStatus snapshot_status;
-
-    if (!ReadSnapshotStatus(lock, snapshot_name, &snapshot_status)) {
-        // this check is just for CF to pass update_engine_integration tests. On
-        // startup, CF has a system_b partition for storing system_other. This is an active DM
-        // device that is not mapped. For regular OTA, we write snapshot status to mark system_b as
-        // inactive, but in testing we don't write this status and fail when we attempt to read the
-        // status.
-        if (DeleteDeviceIfExists(snapshot_name)) {
-            LOG(INFO) << "deleted active device that is not a snapshot " << snapshot_name;
-            return true;
-        }
-        LOG(ERROR) << "Could not delete device: " << snapshot_name;
-        return false;
-    }
-    // If the merge is complete, then we switch dm tables which is equivalent
-    // to unmap; hence, we can't be deleting the device
-    // as the table would be mounted off partitions and will fail.
-    if (snapshot_status.state() != SnapshotState::MERGE_COMPLETED) {
-        if (!DeleteDeviceIfExists(dm_user_name, 4000ms)) {
-            LOG(ERROR) << "Cannot unmap " << dm_user_name;
-            return false;
-        }
-    }
-
-    // Only tell snapuserd if the device is actually mapped
-    if (is_mapped && EnsureSnapuserdConnected()) {
-        LOG(DEBUG) << "UnmapUserSpaceSnapshotDevice: " << dm_user_name;
-        if (!snapuserd_client_->WaitForDeviceDelete(dm_user_name)) {
-            LOG(ERROR) << "Failed to wait for " << dm_user_name << " control device to delete";
-            return false;
-        }
-    }
-
-    // Ensure the control device is gone so we don't run into ABA problems.
-    // This is only needed for DM_USER
-    if (snapshot_driver == SnapshotManager::SnapshotDriver::DM_USER) {
-        auto control_device = "/dev/dm-user/" + dm_user_name;
-        if (!android::fs_mgr::WaitForFileDeleted(control_device, 10s)) {
-            LOG(ERROR) << "Timed out waiting for " << control_device << " to unlink";
-            return false;
-        }
     }
     return true;
 }
