@@ -413,9 +413,22 @@ bool CowReader::GetSequenceData(std::vector<uint32_t>* sequence_data) {
     return true;
 }
 
+const CowOperation* FindOpForBlock(uint64_t block, ICowOpIter* iter) {
+    while (!iter->AtBegin()) {
+        if (iter->Get()->new_block == block) {
+            return iter->Get();
+        }
+        iter->Prev();
+    }
+    if (iter->Get()->new_block == block) {
+        return iter->Get();
+    }
+    return nullptr;
+}
+
 bool CowReader::VerifyMergeOps() {
     auto itr = GetMergeOpIter(true);
-    std::unordered_map<uint64_t, const CowOperation*> overwritten_blocks;
+    std::vector<bool> dirty_blocks;
     bool non_ordered_op_found = false;
 
     while (!itr->AtEnd()) {
@@ -453,20 +466,25 @@ bool CowReader::VerifyMergeOps() {
         bool misaligned = (GetBlockRelativeOffset(header_, offset) != 0);
 
         const CowOperation* overwrite = nullptr;
-        if (overwritten_blocks.count(block)) {
-            overwrite = overwritten_blocks[block];
+        if (block < dirty_blocks.size() && dirty_blocks[block]) {
+            overwrite = FindOpForBlock(block, itr.get());
+            CHECK(overwrite != nullptr);
             LOG(ERROR) << "Invalid Sequence! Block needed for op:\n"
                        << *op << "\noverwritten by previously merged op:\n"
                        << *overwrite;
         }
-        if (misaligned && overwritten_blocks.count(block + 1)) {
-            overwrite = overwritten_blocks[block + 1];
+        if (misaligned && block + 1 < dirty_blocks.size() && dirty_blocks[block + 1]) {
+            overwrite = FindOpForBlock(block + 1, itr.get());
+            CHECK(overwrite != nullptr);
             LOG(ERROR) << "Invalid Sequence! Block needed for op:\n"
                        << op << "\noverwritten by previously merged op:\n"
                        << *overwrite;
         }
         if (overwrite != nullptr) return false;
-        overwritten_blocks[op->new_block] = op;
+        if (op->new_block >= dirty_blocks.size()) {
+            dirty_blocks.resize(op->new_block + 1);
+        }
+        dirty_blocks[op->new_block] = true;
         itr->Next();
     }
     return true;
